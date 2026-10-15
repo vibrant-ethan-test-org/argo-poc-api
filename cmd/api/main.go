@@ -31,7 +31,7 @@ func main() {
 		writeJSON(w, map[string]string{"version": version, "commit": commit, "env": env})
 	})
 	mux.HandleFunc("GET /api/info", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, map[string]string{"service": "argo-poc-api", "version": version, "env": env, "pod": pod})
+		writeJSON(w, map[string]string{"service": "argo-poc-api", "version": version, "env": env, "pod": pod, "message": "hello from argo-poc-api"})
 	})
 
 	log.Printf("argo-poc-api %s (%s) listening on :8080", version, commit)
