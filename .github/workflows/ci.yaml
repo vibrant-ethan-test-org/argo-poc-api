@@ -1,0 +1,23 @@
+# Build, push and deploy to test using the shared release workflow in the gitops repo.
+name: ci
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ["**.md"]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-main
+  cancel-in-progress: false
+
+jobs:
+  release:
+    uses: vibrant-ethan-test-org/argo-poc-gitops/.github/workflows/release.yaml@main
+    permissions:
+      contents: read
+      packages: write
+    with:
+      service: argo-poc-api
+      images: '[{"image": "argo-poc-api", "context": ".", "file": "Dockerfile"}]'
+    secrets: inherit
