@@ -1,5 +1,5 @@
-// Command e2e checks a deployed argo-poc-api. Argo Rollouts runs it (as /e2e in the same image)
-// against the preview Service before switching traffic; a non-zero exit aborts the rollout.
+// Command e2e checks a deployed argo-poc-api. The Harness pipeline runs it (as /e2e in the same image)
+// against the stage Service before swapping traffic; a non-zero exit fails the stage.
 package main
 
 import (
@@ -31,21 +31,25 @@ func getJSON(url string, v any) error {
 func main() {
 	target := strings.TrimRight(os.Getenv("TARGET_URL"), "/")
 	expectedSHA := os.Getenv("EXPECTED_SHA")
+	expectedVersion := os.Getenv("EXPECTED_VERSION")
 	if target == "" {
 		fmt.Println("FAIL: TARGET_URL is not set")
 		os.Exit(2)
 	}
-	fmt.Printf("e2e against %s (expected commit %q)\n", target, expectedSHA)
+	fmt.Printf("e2e against %s (expected version %q, commit %q)\n", target, expectedVersion, expectedSHA)
 
 	checks := []struct {
 		name string
 		run  func() error
 	}{
 		{"healthz returns 200", func() error { return getJSON(target+"/healthz", nil) }},
-		{"version matches the commit being deployed", func() error {
-			var v struct{ Commit string }
+		{"version matches the release being deployed", func() error {
+			var v struct{ Version, Commit string }
 			if err := getJSON(target+"/version", &v); err != nil {
 				return err
+			}
+			if expectedVersion != "" && v.Version != expectedVersion {
+				return fmt.Errorf("version %q, want %q", v.Version, expectedVersion)
 			}
 			if expectedSHA != "" && v.Commit != expectedSHA {
 				return fmt.Errorf("commit %q, want %q", v.Commit, expectedSHA)
