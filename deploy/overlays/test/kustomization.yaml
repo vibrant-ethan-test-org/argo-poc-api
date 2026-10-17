@@ -1,0 +1,9 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+namespace: argo-poc-api-test
+# D-024: one replica per local stage.
+replicas:
+  - name: argo-poc-api
+    count: 1
