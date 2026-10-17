@@ -1,0 +1,25 @@
+apiVersion: promotion.vibrantsci.com/v1alpha1
+project: argo-poc-api
+owner:
+  team: platform
+  slack: '#argo-poc'
+# D-019: all images must carry the same commit revision.
+source:
+  repo: https://github.com/vibrant-ethan-test-org/argo-poc-api
+  branch: main
+  images:
+    - image: ghcr.io/vibrant-ethan-test-org/argo-poc-api
+      tagPattern: '^v\d+\.\d+\.\d+$'
+stages:
+  - name: test
+    deploy: {argocd: {app: argo-poc-api-test}}
+    gate: [{bake: 1m}]
+    onGateFailure: keep
+  - name: staging
+    upstream: test
+    deploy: {argocd: {app: argo-poc-api-staging}}
+    gate: [{bake: 2m}]
+    onGateFailure: rollback
+  - name: prod
+    upstream: staging
+    deploy: {argocd: {app: argo-poc-api-prod}}
