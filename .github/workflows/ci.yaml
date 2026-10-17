@@ -15,7 +15,7 @@ on:
     # promotion-controller e2e tests (test/e2e there) build releases of main's commit with these.
     inputs:
       e2e_id:
-        description: Run id of a promotion-controller e2e test; shown in the run name so the test finds its run
+        description: Run id of a promotion-controller e2e test ([A-Za-z0-9-]); shown in the run name so the test finds its run
         required: false
         default: ""
       e2e_fail:
@@ -46,7 +46,21 @@ jobs:
         run: |
           echo "::error::dispatch only on main, not $GITHUB_REF"
           exit 1
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # Dispatch inputs reach the run name and the build (E2E_FAIL): accept only known values.
+      - name: Inputs
+        id: inputs
+        env:
+          E2E_ID: ${{ inputs.e2e_id }}
+          E2E_FAIL: ${{ inputs.e2e_fail }}
+        run: |
+          [[ "$E2E_ID" =~ ^[A-Za-z0-9-]*$ ]] || { echo "::error::e2e_id must match [A-Za-z0-9-]*"; exit 1; }
+          case "$E2E_FAIL" in
+            ""|none) fail= ;;
+            test|staging|prod) fail=$E2E_FAIL ;;
+            *) echo "::error::e2e_fail must be none, test, staging or prod"; exit 1 ;;
+          esac
+          echo "e2e_fail=$fail" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Tag the commit
         if: github.event_name != 'pull_request'
         run: |
@@ -71,7 +85,7 @@ jobs:
           build-args: |
             VERSION=${{ env.VERSION }}
             COMMIT=${{ github.sha }}
-            E2E_FAIL=${{ inputs.e2e_fail != 'none' && inputs.e2e_fail || '' }}
+            E2E_FAIL=${{ steps.inputs.outputs.e2e_fail }}
           annotations: |
             index,manifest:org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             index,manifest:org.opencontainers.image.revision=${{ github.sha }}
