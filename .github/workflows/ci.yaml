@@ -2,6 +2,7 @@
 # release pipeline (test with blue-green + e2e, approval, prod). The git tag of the same name pins
 # the deploy/ manifests Harness uses to this commit, so it is pushed before the image.
 name: ci
+run-name: ${{ inputs.e2e_id && format('e2e {0}', inputs.e2e_id) || '' }}
 
 on:
   push:
@@ -11,6 +12,17 @@ on:
     branches: [main]
     paths-ignore: ["**.md"]
   workflow_dispatch:
+    # promotion-controller e2e tests (test/e2e there) build releases of main's commit with these.
+    inputs:
+      e2e_id:
+        description: Run id of a promotion-controller e2e test; shown in the run name so the test finds its run
+        required: false
+        default: ""
+      e2e_fail:
+        description: Stage whose e2e this build fails (E2E_FAIL), or none for a normal build
+        type: choice
+        options: [none, test, staging, prod]
+        default: none
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -52,6 +64,7 @@ jobs:
           build-args: |
             VERSION=${{ env.VERSION }}
             COMMIT=${{ github.sha }}
+            E2E_FAIL=${{ inputs.e2e_fail != 'none' && inputs.e2e_fail || '' }}
           annotations: |
             index,manifest:org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             index,manifest:org.opencontainers.image.revision=${{ github.sha }}
