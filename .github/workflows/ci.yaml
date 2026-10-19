@@ -1,6 +1,8 @@
-# Build and push the image. That is all CI does: Harness sees the new tag in GHCR and runs the
+# Build and push the image. Harness sees the new tag in GHCR and runs the
 # release pipeline (test with blue-green + e2e, approval, prod). The git tag of the same name pins
 # the deploy/ manifests Harness uses to this commit, so it is pushed before the image.
+# On main, the descriptor job then publishes the build's release descriptor for the promotion controller
+# (promotion-controller D-072) through the vendored, hash-checked shared action in .github/actions/release-descriptor.
 name: ci
 run-name: ${{ inputs.e2e_id && format('e2e {0}', inputs.e2e_id) || '' }}
 
@@ -32,6 +34,11 @@ on:
         type: choice
         options: [none, 20s]
         default: none
+      initialize_journal:
+        description: Write the release-descriptor journal's sequence 0 when it has no head (once, D-072)
+        type: choice
+        options: ["false", "true"]
+        default: "false"
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -44,6 +51,11 @@ env:
 jobs:
   release:
     runs-on: ubuntu-latest
+    outputs:
+      commit: ${{ steps.source.outputs.commit }}
+      version: ${{ env.VERSION }}
+      api_digest: ${{ steps.build.outputs.digest }}
+      api_completed_at: ${{ steps.build_done.outputs.at }}
     permissions:
       contents: write # push the release tag
       packages: write
@@ -128,6 +140,9 @@ jobs:
             org.opencontainers.image.revision=${{ steps.source.outputs.commit }}
             org.opencontainers.image.version=${{ env.VERSION }}
             org.opencontainers.image.created=${{ steps.timestamp.outputs.created }}
+      - name: api build completed
+        id: build_done
+        run: echo "at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
       # Release tags last, back to back, to keep the window in which a registry poller sees only some of the build's
       # images as short as possible; it isn't zero (D-057). All of a commit's builds share its revision, and one
       # image's new tag next to another's old one would look like a new set (promotion-controller T09, D-041).
@@ -178,3 +193,49 @@ jobs:
             tagged="$tagged $image"
             echo "$image:$VERSION -> $got"
           done
+
+  # Publishes this run's release descriptor (promotion-controller D-072, docs/design/23-release-descriptors.md §23.4)
+  # through the vendored copy of the shared action, after checking its recorded hashes. It runs only when every image
+  # job succeeded on main, takes digests from those jobs' outputs and never resolves a tag. It has no deployment
+  # credentials: only the job token, scoped to this repository's packages.
+  descriptor:
+    needs: release
+    # A source_commit build is of an older commit than this run's GITHUB_SHA, which the publisher refuses.
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && !inputs.source_commit
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    concurrency:
+      group: release-descriptor-argo-poc-api
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the vendored action
+        working-directory: .github/actions/release-descriptor
+        run: |
+          set -euo pipefail
+          [[ -z "$(find . ! -type f ! -type d)" ]] || { echo "::error::vendored action: unexpected file type"; exit 1; }
+          diff <(find . -type f ! -name SHA256SUMS | sed 's|^\./||' | LC_ALL=C sort) \
+            <(grep -v '^#' SHA256SUMS | sed -E 's/^[0-9a-f]{64}  //' | LC_ALL=C sort) ||
+            { echo "::error::vendored action: file set differs from SHA256SUMS"; exit 1; }
+          grep -v '^#' SHA256SUMS | sha256sum --strict --check --quiet
+      - name: Collect build outputs
+        env:
+          COMMIT: ${{ needs.release.outputs.commit }}
+          VERSION: ${{ needs.release.outputs.version }}
+          API_DIGEST: ${{ needs.release.outputs.api_digest }}
+          API_COMPLETED_AT: ${{ needs.release.outputs.api_completed_at }}
+        run: |
+          set -euo pipefail
+          workflow=${GITHUB_WORKFLOW_REF#"$GITHUB_REPOSITORY/"}
+          jq -n --arg repository "$GITHUB_REPOSITORY" --arg commit "$COMMIT" --arg workflow "${workflow%%@*}" \
+            --arg runId "$GITHUB_RUN_ID" --arg runAttempt "$GITHUB_RUN_ATTEMPT" --arg version "$VERSION" \
+            --arg owner "$GITHUB_REPOSITORY_OWNER" '{schemaVersion: 1, run: {repository: $repository, commit: $commit, workflow: $workflow, runId: $runId, runAttempt: $runAttempt}, version: $version, images: [{image: ("ghcr.io/" + $owner + "/argo-poc-api"), tag: $version, digest: env.API_DIGEST, commit: $commit, completedAt: env.API_COMPLETED_AT, result: "success"}]}' > "$RUNNER_TEMP/build-outputs.json"
+      - uses: ./.github/actions/release-descriptor
+        with:
+          build-outputs-file: ${{ runner.temp }}/build-outputs.json
+          initialize-journal: ${{ inputs.initialize_journal == 'true' }}
